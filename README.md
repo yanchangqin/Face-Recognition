@@ -1,0 +1,4 @@
+# Face-Recognition
+人脸检测的网络为MTCNN，数据集为开源数据集为CelebA，后期可以加入Widerface
+人脸识别网络取删减的Darknet53，因为该网络过大，所以有所删减，另可用VGG16或者VGG19作为特征提取网络
+人脸分类网络训练用Arcface
