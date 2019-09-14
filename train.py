@@ -1,82 +1,87 @@
-import os
 import torch
 import torch.nn as nn
+import os
+import PIL.Image as image
+from net import MainNet
+from LOSS import CenterLoss
+# from LOSS_1 import CenterLoss
+# from CenterLoss import CenterLoss
+from ArcLoss import Arc_Loss
 import torch.optim as optim
-from dataset import DATA
+import numpy  as np
+import matplotlib.pyplot as plt
+import torch.optim.lr_scheduler as lr_scheduler
+import torchvision.transforms as transforms
 import torch.utils.data as data
-from net import P_Net,R_Net,O_Net
-
-class Trainer:
-    def __init__(self,net,dataset_path,save_path,save_param,iscuda=True):
-        self.net = net
-        self.dataset_path = dataset_path
-        self.save_path = save_path
-        self.save_param = save_param
-        self.iscuda = iscuda
-
-        if self.iscuda:
-            self.net = self.net.cuda()
-            print('GPU')
-
-        self.loss_f1 = nn.BCELoss()
-        self.loss_f2 = nn.MSELoss()
-        self.optimizer = optim.Adam(self.net.parameters())
-
-        if os.path.exists(os.path.join(self.save_path,self.save_param)):
-            # net.load(torch.load(self.save_path))
-            self.net=torch.load(os.path.join(self.save_path,self.save_param))
-
-    def train(self):
-        face_dataset = DATA(self.dataset_path)
-        dataloder = data.DataLoader(dataset=face_dataset,batch_size=500,shuffle=True,num_workers=4)
-        for epoch in range(16,1000):
-            for i,(img_data,conf,offset)in enumerate(dataloder):
-                if self.iscuda:
-                    img_data = img_data.cuda()
-                    conf = conf.cuda()
-                    offset = offset.cuda()
-                img_data = img_data.permute(0,3,1,2)
-                output_conf,output_offset = self.net(img_data)
-                output_conf = output_conf.view(-1,1)
-                # print(output_conf[0])
-                # print(conf[0])
-                output_offset = output_offset.view(-1,4)
-                # print(output_conf.size())
-                # print(output_offset.size())
-                #选出置信度为0,1的标签做损失
-                conf_index = torch.lt(conf,2)
-                cond_mask = conf[conf_index]
-                output_confmask = output_conf[conf_index]
-                loss_conf = self.loss_f1(output_confmask,cond_mask)
-                # print(output_confmask[0])
-                # print(cond_mask[0])
-
-                # 选出置信度为1,2的标签做损失
-                offset_index = torch.gt(conf, 0)
-                offset_mask= offset[torch.nonzero(offset_index)]
-                output_offsetmask = output_offset[torch.nonzero(offset_index)]
-                loss_offset = self.loss_f2(output_offsetmask,offset_mask)
-                #总损失
-                loss = loss_conf+loss_offset
-
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
-                if i%50==0:
-                    print(epoch)
-                    print('总损失：',loss.item(),'置信度损失：',loss_conf.item(),'偏移量损失：',loss_offset.item())
-            # torch.save(self.net,self.save_path)
-            if not os.path.exists(os.path.join(self.save_path, str(epoch))):
-                os.makedirs(os.path.join(self.save_path, str(epoch)))
-            torch.save(self.net, os.path.join(self.save_path, str(epoch), self.save_param))
+import torch.nn.functional as F
+from dataset import MyDataset,convert_to_squre
 
 
+# save_path = r'F:\ycq\centerloss\face_all'
+save_path =r'F:\ycq\arcloss\face_arc'
+save_path_test = r'F:\ycq\centerloss\face_test'
+save_param = r'param_net.pt'
 
 
-# p_net = P_Net()
-# r_net = R_Net()
-# o_net = O_Net()
-# trainer = Trainer(net=o_net,dataset_path=r'F:\MTCNN\test2\celeba\48',save_path='./para_pnet.pt')
-# trainer.train()
+change_tensor = transforms.Compose([
+    transforms.ToTensor()
+]
+)
+use_cuda = torch.cuda.is_available() and True
+device = torch.device("cuda" if use_cuda else "cpu")
+# net = Net().to(device)
+net = MainNet().to(device)
+nllloss = nn.NLLLoss().to(device)
+centerloss = CenterLoss(5,256).to(device)
+arcloss = Arc_Loss(256,5).to(device)
+net.load_state_dict(torch.load(os.path.join(save_path,save_param)))
+optimizer1 = optim.Adam(net.parameters())
+optimizer2 = optim.Adam(centerloss.parameters())
+mydata = MyDataset()
+dataloder = data.DataLoader(dataset=mydata,batch_size=10,shuffle=True)
+# optimizer4nn = optim.SGD(net.parameters(),lr=0.00001,momentum=0.9, weight_decay=0.0005)
+# sheduler = lr_scheduler.StepLR(optimizer4nn,20,gamma=0.8)
 
+
+def trainer(epoch):
+    print("training Epoch: {}".format(epoch))
+    net.train()
+
+    for j,(array,label) in enumerate(dataloder):
+        # print(label)
+        # print(label)
+        array=array.to(device)
+        label = label.to(device)
+        features,output = net(array)
+        # print(output)
+        # print(label)
+        # print(features.size())
+
+        # loss1 =centerloss(features,label)
+        # print('loss1',loss1.item())
+        # print('out',out.size())
+        # loss = F.cross_entropy(out,y.cpu())
+        out = arcloss(features)
+        # print('loss2',loss2.item())
+        out = torch.log(out)
+        loss2 = nllloss(out,label)
+        # loss = loss1+loss2
+        loss =  loss2
+
+        optimizer1.zero_grad()
+        optimizer2.zero_grad()
+
+        loss.backward()
+
+        optimizer1.step()
+        optimizer2.step()
+        print('epoch', epoch, 'loss:', loss.item())
+        if epoch%100==0:
+            if not os.path.exists(os.path.join(save_path, str(epoch))):
+                os.makedirs(os.path.join(save_path, str(epoch)))
+            torch.save(net.state_dict(), os.path.join(save_path, str(epoch), save_param))
+
+
+for epoch in range(2000):
+    trainer(epoch + 1)
 
